@@ -1,157 +1,41 @@
 /**
  * DDom.js - Documented document object model
  * The DOM library that whines
+ *
+ * Support:
+ *		Chrome 36
+ *		Edge 12
+ *		Firefox (Gecko) 6
+ *		Internet Explorer 11
+ *		Opera 23
+ *		Safari 7.1
  */
 
 /*global HTMLCollection,Node,CustomEvent,NodeList */
+//noinspection JSUnusedGlobalSymbols
 
 /**
  * @typedef {{
  *		target: DDom,
  *		delegateTarget: DDom,
  *		currentTarget: DDom
- * }}
+ * }} DDomEventElements
  */
-var DDomEventElements;
 
 /**
  * @typedef {{
- *		eventRemove: Function,
- * }|Event}
+ * }|Event} DDomEvent
  */
-var DDomEvent;
 
 /**
  * DDom HTML helper
  */
 (function(window) {
-	var eventCache = null;
-
- 	// WeakMap hack - this should be used only for keys that are dom elements
-	// if dom element is removed from page that reference is removed from here
-	// With real weak maps we get nice performance and no leaks so good to start using already - at this point
-	// FF and IE11 has WeakMaps and next version of Chrome 36 will have those also
-	/*global WeakMap*/
-	if (typeof WeakMap !== "function") {
-		/**
-		 * WeakMap hack
-		 * @constructor
-		 */
-		var DDomWeakMap = function() {
-			var cache = {},
-				id = 0;
-
-			/**
-			 * Get data bind to key
-			 * @param {HTMLElement} element
-			 * @returns {*}
-			 */
-			this.get = function(element) {
-				var data = false;
-
-				Object.keys(cache).some(function(key) {
-					if (cache[key] && cache[key].element === element) {
-						data = cache[key].data;
-						return true;
-					}
-
-					return false;
-				});
-
-				return data;
-			};
-
-			/**
-			 * Set data
-			 * @param {HTMLElement} element
-			 * @param {Object} data
-			 */
-			this.set = function(element, data) {
-				var	key = false;
-
-				Object.keys(cache).some(function(k) {
-					if (cache[k] && cache[k].element === element) {
-						key = k;
-						return true;
-					}
-
-					return false;
-				});
-
-				cache[key || id++] = {
-					data: data,
-					element: element
-				};
-			};
-
-			/**
-			 * Is key in map
-			 * @param {HTMLElement} element
-			 * @return boolean
-			 */
-			this.has = function(element) {
-				return Object.keys(cache).some(function(key) {
-					return (cache[key] && cache[key].element === element);
-				});
-			};
-
-			/**
-			 * Delete key
-			 * @param {HTMLElement} element
-			 */
-			this.delete = function(element) {
-				return Object.keys(cache).some(function(key) {
-					if (cache[key] && cache[key].element === element) {
-						delete cache[key];
-						return true;
-					}
-
-					return false;
-				});
-			};
-
-			/**
-			 * Clear all keys
-			 */
-			this.clear = function() {
-				cache = {};
-			};
-
-			/**
-			 * Get all elements in wakMap hack
-			 * @returns {{}}
-			 */
-			this.getCache = function() {
-				return cache;
-			};
-
-			window.setInterval(this.gc.bind(cache), 30000);
-		};
-
-		DDomWeakMap.prototype = /** @lends DDomWeakMap */ {
-			/**
-			 * Because this is just cheap way to pretend to have weakMaps we have to do manual clear for objects
-			 * This system works only when keys are dom nodes and those has been removed from page
-			 * @private
-			 */
-			gc: function() {
-				Object.keys(this).forEach(function(key) {
-					var obj = this[key];
-
-					if (!document.body.contains(obj.element)) {
-						delete this[key];
-					}
-				}.bind(this));
-			}
-		};
-
-		eventCache = new DDomWeakMap();
-	} else {
-		eventCache = new WeakMap();
-	}
+	var eventCache = new window.WeakMap();
 
 	// Fix Element.prototype.matches to older browsers
 	(function(ElementPrototype) {
+		//noinspection JSUnresolvedVariable
 		/**
 		 * Matches selector
 		 * @function
@@ -168,7 +52,7 @@ var DDomEvent;
 	/**
 	 * DDom constructor
 	 * @constructor
-	 * @param {(string|Element|HTMLElement|Node|NodeList|HTMLCollection|DDom|DocumentFragment)} [element]
+	 * @param {(string|Element|HTMLElement|Node|NodeList|HTMLCollection|DDom|DocumentFragment|Window)} [element]
 	 * @param {Object} [options]
 	 * @returns {DDom}
 	 */
@@ -202,16 +86,24 @@ var DDomEvent;
 		return this;
 	};
 
+	//noinspection JSUnusedGlobalSymbols
 	/**
 	 * DDom prototype
-	 * @memberOf DDom
 	 */
-	DDom.prototype = {
-		version: 0.1,
-		slDom: true,
+	DDom.prototype = /**@lends {DDom.prototype}*/{
+		version: 0.2,
+		DDom: true,
 		length: 0,
 		slice: Array.prototype.slice,
 		splice: Array.prototype.splice,
+
+		/**
+		 * Write error
+		 * @param {string} message
+		 */
+		consoleError: function(message) {
+			console.error(`DDom: ${message}`);
+		},
 
 		/**
 		 * Push new elements to this object
@@ -220,7 +112,7 @@ var DDomEvent;
 		push: function(elements) {
 			var x;
 
-			if (elements.slDom) {
+			if (elements.DDom) {
 				elements = elements.getAll();
 			}
 
@@ -294,33 +186,37 @@ var DDomEvent;
 		 * @return {DDom}
 		 */
 		eventBind: function(type, callback, useCapture) {
-			var self = this;
+			var items = this.slice(0),
+				x, element, handle;
 
-			this.slice(0).forEach(function(element) {
-				var handle = {
+			var eventHandler = function (type, callback, event) {
+				try {
+					if (callback.call(this, event, new DDom(event.target)) === false) {
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				} catch(/*Error*/e) {
+					type = (event instanceof CustomEvent) ? type + ' / ' + event.detail[0] : type;
+
+					DDom.prototype.consoleError(`eventBind [${type}] - ${e.name}:${e.message} [Function: ${callback.toString()}]`);
+
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			};
+
+			for (x = 0; x < items.length; x++) {
+				element = items[x];
+
+				handle = {
 					event: type,
 					capture: !!useCapture,
-					f: function(type, event) {
-						event.eventRemove = function(type) {
-							this.removeEventListener(type, handle.f);
-						}.bind(this, type);
-
-						try {
-							if (callback.call(this, event, new DDom(event.target)) === false) {
-								event.preventDefault();
-								event.stopPropagation();
-							}
-						} catch(e) {
-							self.logError('DDom:eventBind - callback threw uncaught exception:', e.message, e.fileName, e.lineNumber);
-							event.preventDefault();
-							event.stopPropagation();
-						}
-
-					}.bind(element, type)
+					callback: callback,
+					f: eventHandler.bind(element, type, callback)
 				};
 
 				this.eventBindCache(element, handle);
-			}.bind(this));
+			}
 
 			return this;
 		},
@@ -328,36 +224,38 @@ var DDomEvent;
 		/**
 		 * Click event binding to element
 		 * @param {Function} callback
+		 * @param {boolean} [useCapture]
 		 * @return {DDom}
 		 */
-		eventClick: function(callback) {
-			var self = this;
+		eventClick: function(callback, useCapture) {
+			var items = this.slice(0),
+				x, element, handle;
 
-			this.slice(0).forEach(function(element) {
-				var handle = {
+			var eventHandler = function(callback, event) {
+				try {
+					if (callback.call(this, event, new DDom(event.target)) === false) {
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				} catch(/*Error*/e) {
+					DDom.prototype.consoleError(`eventClick - [${e.name}: ${e.message}] [Function: ${callback.toString()}]`);
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			};
+
+			for (x = 0; x < items.length; x++) {
+				element = items[x];
+
+				handle = {
 					event: 'click',
-					capture: false,
-					f: function(event) {
-						event.eventRemove = function() {
-							this.removeEventListener('click', handle.f);
-						}.bind(this);
-
-						try {
-							if (callback.call(this, event, new DDom(event.target)) === false) {
-								event.preventDefault();
-								event.stopPropagation();
-							}
-						} catch(e) {
-							self.logError('DDom:eventClick - callback threw uncaught exception:', e.message, e.fileName, e.lineNumber);
-							event.preventDefault();
-							event.stopPropagation();
-						}
-
-					}.bind(element)
+					capture: !!useCapture,
+					callback: callback,
+					f: eventHandler.bind(element, callback)
 				};
 
 				this.eventBindCache(element, handle);
-			}.bind(this));
+			}
 
 			return this;
 		},
@@ -366,31 +264,40 @@ var DDomEvent;
 		 * Trigger given event with callback once and then destroy listener
 		 * @param {string} type
 		 * @param {Function} callback
+		 * @param {boolean} [useCapture]
 		 * @return {DDom}
 		 */
-		eventOnce: function(type, callback) {
-			this.slice(0).forEach(function(element) {
-				var handle = {
-					event: type,
-					capture: false,
-					f: function(event) {
-						try {
-							if (callback.call(this, event, new DDom(event.target)) === false) {
-								event.preventDefault();
-								event.stopPropagation();
-							}
-						} catch(e) {
-							event.preventDefault();
-							event.stopPropagation();
-							throw new Error('DDom:eventOnce - callback threw uncaught exception: ' + e.message, e);
-						}
+		eventOnce: function(type, callback, useCapture) {
+			var items = this.slice(0),
+				x, element, handle;
 
-						this.removeEventListener(type, handle.f);
-					}.bind(element)
+			var eventHandler = function (callback, event) {
+				try {
+					if (callback.call(this, event, new DDom(event.target)) === false) {
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				} catch(/*Error*/e) {
+					DDom.prototype.consoleError(`eventOnce - [${e.name}: ${e.message}] [Function: ${callback.toString()}]`);
+					event.preventDefault();
+					event.stopPropagation();
+				}
+
+				this.removeEventListener(type, handle.f);
+			};
+
+			for (x = 0; x < items.length; x++) {
+				element = items[x];
+
+				handle = {
+					event: type,
+					capture: !!useCapture,
+					callback: callback,
+					f: eventHandler.bind(element, callback)
 				};
 
 				this.eventBindCache(element, handle);
-			}.bind(this));
+			}
 
 			return this;
 		},
@@ -400,20 +307,22 @@ var DDomEvent;
 		 * @param {(string|Array)} events
 		 * @param {(string|Array|Function)} data
 		 * @param {Function} [callback]
-		 * @param {boolean} useCapture
+		 * @param {boolean} [useCapture]
 		 * @return {DDom}
 		 */
 		on: function(events, data, callback, useCapture) {
 			var elements = [],
 				hasElements = false,
-				self = this;
+				x;
 
 			if (this.length === 0) {
-				throw new Error('DDom::on - No elements to bind data');
+				this.consoleError(`Event::on - No elements to bind data ${this.on.caller.toString()}`);
+				return null;
 			}
 
 			if (this.length > 1) {
-				throw new Error('DDom::on - Multiple elements to bind data');
+				this.consoleError(`Event::on - Multiple elements to bind data ${this.on.caller.toString()}`);
+				return null;
 			}
 
 			if (typeof data === "function") {
@@ -424,83 +333,98 @@ var DDomEvent;
 			}
 
 			if (typeof callback !== "function") {
-				throw new Error("DDom.on did not get valid callback function");
+				this.consoleError(`Event::on - did not get valid callback function ${this.on.caller.toString()}`);
+				return null;
 			}
 
-			events.split(" ").forEach(function(event) {
+			events = events.split(" ");
+			for (x = 0; x < events.length; x++) {
 				var handle = {
-					event: event,
+					event: events[x],
 					// If focus or blur event then useCapture set true - firefox does not work otherwise
-					capture: (event === 'blur' || event === 'focus' || !!useCapture),
+					capture: (events[x] === 'blur' || events[x] === 'focus' || !!useCapture),
 					callback: callback,
-					f: function(delegateTarget, hasElements, event) {
-						/**
-						 * @type {HTMLElement}
-						 */
-						var clicked = event.target;
-
-						var elements = {};
-
-						if (hasElements) {
-							// Check that matches function is found from element and do matching - document does not
-							// have matches function
-							if (clicked.matches && clicked.matches(data)) {
-								elements.target = new DDom(event.target);
-								elements.delegateTarget = new DDom(delegateTarget);
-								elements.currentTarget = elements.target;
-
-								try {
-									if (callback.call(clicked, event, elements) === false) {
-										event.preventDefault();
-										event.stopPropagation();
-									}
-								} catch(e1) {
-									self.logError('DDom:on - callback threw uncaught exception:', e1.message, e1.fileName, e1.lineNumber);
-									event.preventDefault();
-									event.stopPropagation();
-								}
-							} else {
-								elements.target = new DDom(clicked);
-								elements.currentTarget = elements.target.closest(data, delegateTarget);
-
-								if (elements.currentTarget.hasElements()) {
-									elements.delegateTarget = new DDom(delegateTarget);
-									try {
-										if (callback.call(event.target, event, elements) === false) {
-											event.preventDefault();
-											event.stopPropagation();
-										}
-									} catch(e2) {
-										self.logError('DDom:on - callback threw uncaught exception:', e2.message, e2.fileName, e2.lineNumber);
-										event.preventDefault();
-										event.stopPropagation();
-									}
-								}
-							}
-
-						} else {
-							elements.target = new DDom(event.target);
-							elements.delegateTarget = new DDom(delegateTarget);
-							elements.currentTarget = elements.target;
-
-							try {
-								if (callback.call(event.target, event, elements) === false) {
-									event.preventDefault();
-									event.stopPropagation();
-								}
-							} catch(e3) {
-								self.logError('DDom:on - callback threw uncaught exception:', e3.message, e3.fileName, e3.lineNumber);
-								event.preventDefault();
-								event.stopPropagation();
-							}
-						}
-					}.bind(this, this[0], hasElements)
+					f: this.onEventHandler.bind(this, this[0], hasElements, data, callback)
 				};
 
 				this.eventBindCache(this[0], handle);
-			}.bind(this));
+			}
 
 			return this;
+		},
+
+		/**
+		 * Handle on bind events
+		 * @private
+		 * @param {DDom|HTMLElement} delegateTarget
+		 * @param {boolean} hasElements
+		 * @param {string} data
+		 * @param {Function} callback
+		 * @param {Event} event
+		 */
+		onEventHandler: function(delegateTarget, hasElements, data, callback, event) {
+			/**
+			 * @type {HTMLElement}
+			 */
+			var clicked = /**@type {HTMLElement}*/(event.target);
+
+			var elements = {};
+
+			if (hasElements) {
+				// Check that matches function is found from element and do matching - document does not have
+				if (clicked.matches && clicked.matches(data)) {
+					elements.target = new DDom(event.target);
+					elements.delegateTarget = new DDom(delegateTarget);
+					elements.currentTarget = elements.target;
+
+					try {
+						if (callback.call(clicked, event, elements) === false) {
+							event.preventDefault();
+							event.stopPropagation();
+						}
+					} catch(/*Error*/e1) {
+						//noinspection JSUnresolvedFunction
+						this.consoleError(`on[1] - [${e1.name}: ${e1.message}] [Element: ${data}] [Function: ${callback.toString()}]`);
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				} else {
+					elements.target = new DDom(clicked);
+					elements.currentTarget = elements.target.closest(data, delegateTarget);
+
+					if (elements.currentTarget.hasElements()) {
+						elements.delegateTarget = new DDom(delegateTarget);
+						try {
+							if (callback.call(event.target, event, elements) === false) {
+								event.preventDefault();
+								event.stopPropagation();
+							}
+						} catch(/*Error*/e2) {
+							//noinspection JSUnresolvedFunction
+							this.consoleError(`on[2] - [${e2.name}: ${e2.message}] [Element: ${data}] [Function: ${callback.toString()}]`);
+							event.preventDefault();
+							event.stopPropagation();
+						}
+					}
+				}
+
+			} else {
+				elements.target = new DDom(event.target);
+				elements.delegateTarget = new DDom(delegateTarget);
+				elements.currentTarget = elements.target;
+
+				try {
+					if (callback.call(event.target, event, elements) === false) {
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				} catch(/*Error*/e3) {
+					//noinspection JSUnresolvedFunction
+					this.consoleError(`on[3] - [${e3.name}: ${e3.message}] [Element: ${data}] [Function: ${callback.toString()}]`);
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			}
 		},
 
 		/**
@@ -566,7 +490,7 @@ var DDomEvent;
 			var eventObject;
 
 			if (typeof CustomEvent === "function") {
-				eventObject = new CustomEvent(event, {bubbles: true, cancellable: true, detail: args});
+				eventObject = new CustomEvent(event, /** @type CustomEventInit*/({bubbles: true, cancellable: true, detail: args}));
 
 			} else {
 				eventObject = document.createEvent("CustomEvent");
@@ -588,10 +512,15 @@ var DDomEvent;
 			var clone;
 
 			this.slice(0).forEach(function(element, offset) {
-				clone = element.cloneNode(false);
-				element.parentNode.replaceChild(clone, element);
+				var parent = element.parentNode;
 
-				this[offset] = clone;
+				// If node has been removed from the tree then there is no parentNode
+				if (parent !== null) {
+					clone = element.cloneNode(false);
+					parent.replaceChild(clone, element);
+
+					this[offset] = clone;
+				}
 			}.bind(this));
 
 			return this;
@@ -599,13 +528,14 @@ var DDomEvent;
 
 		/**
 		 * Clones current elements and returns
+		 * @param {boolean} [deep=false]
 		 * @return {DDom}
 		 */
-		clone: function() {
+		clone: function(deep) {
 			var clone = new DDom();
 
 			this.slice(0).forEach(function(element) {
-				clone.push(element.cloneNode(false));
+				clone.push(element.cloneNode(!!deep));
 			}.bind(this));
 
 			return clone;
@@ -625,11 +555,14 @@ var DDomEvent;
 
 		/**
 		 * Remove focus from element
+		 * @return {DDom}
 		 */
 		blur: function() {
 			if (this[0] && this[0].nodeType === 1) {
 				this[0].blur();
 			}
+
+			return this;
 		},
 
 		/**
@@ -638,7 +571,7 @@ var DDomEvent;
 		 * @return {DDom}
 		 */
 		after: function(node) {
-			if (node.slDom) {
+			if (node.DDom) {
 				// If there is nothing to append - bail out
 				if (node.length === 0) {
 					return this;
@@ -660,7 +593,7 @@ var DDomEvent;
 		 * @return {DDom}
 		 */
 		before: function(node) {
-			if (node.slDom) {
+			if (node.DDom) {
 				// If there is nothing to append - bail out
 				if (node.length === 0) {
 					return this;
@@ -678,7 +611,7 @@ var DDomEvent;
 
 		/**
 		 * Append child to node
-		 * @param {Node|DDom|string} node
+		 * @param {Node|DDom|string|number} node
 		 * @return {DDom}
 		 */
 		append: function(node) {
@@ -686,7 +619,7 @@ var DDomEvent;
 				return this.addText(node);
 			}
 
-			if (node.slDom) {
+			if (node.DDom) {
 				// If there is nothing to node - bail out
 				if (node.length === 0) {
 					return this;
@@ -708,7 +641,7 @@ var DDomEvent;
 		 * @returns {DDom}
 		 */
 		prepend: function(prepend) {
-			var data = (prepend.slDom) ? prepend.get() : document.createTextNode(prepend);
+			var data = (prepend.DDom) ? prepend.get() : document.createTextNode(prepend);
 
 			this.slice(0).forEach(function(element) {
 				element.insertBefore(data, element.firstChild);
@@ -719,16 +652,37 @@ var DDomEvent;
 
 		/**
 		 * Replace current element with given data
-		 * @param {Node|DDom} replace
+		 * @param {Node|DDom} newNode
 		 * @return {DDom}
 		 */
-		replace: function(replace) {
-			replace = (replace instanceof Node) ? replace : replace[0];
+		replace: function(newNode) {
+			var replace;
 
-			this.slice(0).forEach(function(element) {
-				var parent = element.parentNode;
+			newNode = (newNode instanceof Node) ? newNode : newNode[0];
+
+			if (this.length > 0) {
+				replace = this[0].parentNode;
+
+				if (replace !== null) {
+					replace.replaceChild(newNode, this[0]);
+				}
+			}
+
+			return this;
+		},
+
+		/**
+		 * Replace all elements with given element - this does not copy any event listeners already bind
+		 * @param {Node|DDom} newNode
+		 * @return {DDom}
+		 */
+		replaceAll: function(newNode) {
+			newNode = (newNode instanceof Node) ? newNode : newNode[0];
+
+			this.slice(0).forEach(function(replace) {
+				var parent = replace.parentNode;
 				if (parent !== null) {
-					parent.replaceChild(replace, element);
+					parent.replaceChild(newNode.cloneNode(true), replace);
 				}
 			});
 
@@ -738,10 +692,12 @@ var DDomEvent;
 		/**
 		 * document.createElement
 		 * @param {string} element
-		 * @param {Object} [parameters]
-		 * @param {Object|Array} [parameters.event]
-		 * @param {Object} [parameters.event.type]
-		 * @param {Function} [parameters.event.action]
+		 * @param {{
+		 *		event: {
+		 *			action: Function,
+		 *			type: string
+		 *		}
+		 * }} [parameters]
 		 * @returns {HTMLElement}
 		 */
 		ce: function(element, parameters) {
@@ -753,7 +709,7 @@ var DDomEvent;
 				if (key === "event") {
 					if (Array.isArray(parameters[key])) {
 						parameters[key].forEach(function(/*{type:string, action:Function}*/data) {
-							ret.addEventListener(data.type, data.action);
+							ret.addEventListener(data.type, /**string*/data.action);
 						});
 					} else {
 						ret.addEventListener(parameters[key].type, parameters[key].action);
@@ -863,14 +819,14 @@ var DDomEvent;
 
 		/**
 		 * Search if given node exists in current object node
-		 * @param {DDom|HTMLElement} search
+		 * @param {DDom|HTMLElement|HTMLDocument} search
 		 * @returns {boolean}
 		 */
 		contains: function(search) {
 			// IE fix where document does not have contains function so go to document.body
 			var node = (this[0] === document) ? document.body : this[0];
 
-			search = (search.slDom) ? search.get() : search;
+			search = (search.DDom) ? search.get() : search;
 
 			if (node && node.nodeType === 1) {
 				// Because IE does not have contains in document we have to always handle document.body because
@@ -884,11 +840,14 @@ var DDomEvent;
 
 		/**
 		 * Set focus to element
+		 * @return {DDom}
 		 */
 		focus: function() {
 			if (this[0] && this[0].nodeType === 1) {
 				this[0].focus();
 			}
+
+			return this;
 		},
 
 		/**
@@ -968,6 +927,23 @@ var DDomEvent;
 		},
 
 		/**
+		 * Matches selector
+		 * @param {string} attribute
+		 * @returns {DDom}
+		 */
+		matchesAll: function(attribute) {
+			var matching = new DDom();
+
+			this.slice(0).forEach(function(element) {
+				if (element.nodeType === 1 && element.matches(attribute)) {
+					matching.push(element);
+				}
+			});
+
+			return matching;
+		},
+
+		/**
 		 * Next element sibling
 		 * @returns {DDom}
 		 */
@@ -976,6 +952,23 @@ var DDomEvent;
 
 			if (this[0] && this[0].nodeType === 1) {
 				element = this[0].nextElementSibling;
+				if (element !== null) {
+					return new DDom(element);
+				}
+			}
+
+			return new DDom();
+		},
+
+		/**
+		 * Get last element child
+		 * @returns {DDom}
+		 */
+		last: function() {
+			var element;
+
+			if (this[0] && this[0].nodeType === 1) {
+				element = this[0].lastElementChild;
 				if (element !== null) {
 					return new DDom(element);
 				}
@@ -1158,11 +1151,6 @@ var DDomEvent;
 		 * @return {DDom|string}
 		 */
 		html: function(data) {
-			/**
-			 * @type {DDom}
-			 */
-			var slDom;
-
 			if (data === undefined) {
 				return (this.length !== 0) ? this[0].innerHTML : "";
 			}
@@ -1173,8 +1161,7 @@ var DDomEvent;
 				});
 
 			} else {
-				slDom = data;
-				data = (slDom instanceof DDom) ? slDom.getFragment() : data;
+				data = (data instanceof DDom) ? data.getFragment() : data;
 
 				this.slice(0).forEach(function(element) {
 					element.innerHTML = "";
@@ -1244,12 +1231,28 @@ var DDomEvent;
 		/**
 		 * Set element attribute for element
 		 * @param {string} name
-		 * @param {string|boolean} value
+		 * @param {string|boolean|number} value
 		 */
 		setAttr: function(name, value) {
 			this.slice(0).forEach(function(element) {
 				if (element.nodeType === 1) {
 					element.setAttribute(name, value);
+				}
+			});
+
+			return this;
+		},
+
+		/**
+		 * set css
+		 * @param {string} key
+		 * @param {string} value
+		 * @return {DDom}
+		 */
+		setCSS: function(key, value) {
+			this.slice(0).forEach(function(element) {
+				if (element.nodeType === 1) {
+					element.style[key] = value;
 				}
 			});
 
@@ -1308,6 +1311,15 @@ var DDomEvent;
 		 */
 		getChildren: function() {
 			return (this[0] && this[0].nodeType === 1) ? new DDom(this[0].children) : new DDom();
+		},
+
+		/**
+		 * Get all children of first element
+		 * @param {string} name
+		 * @returns {string|null}
+		 */
+		getDataset: function(name) {
+			return (this[0]) ? this[0].dataset[name] : null;
 		},
 
 		/**
@@ -1379,7 +1391,7 @@ var DDomEvent;
 			if (!!viewPort) {
 				while (element) {
 				   if (element.tagName) {
-					   top = top + element.offsetTop;
+					   top = top + element.offsetTop - element.scrollTop;
 					   left = left + element.offsetLeft;
 					   element = element.offsetParent;
 				   } else {
@@ -1451,6 +1463,10 @@ var DDomEvent;
 		 * @returns {number}
 		 */
 		getWidth: function(margin) {
+			if (this.length === 0) {
+				return 0;
+			}
+
 			var style,
 				calc = this[0].offsetWidth || this[0].outerWidth || 0;
 
@@ -1464,11 +1480,32 @@ var DDomEvent;
 		},
 
 		/**
+		 * Set DataSet for element
+		 * @param {string} name
+		 * @param {string} data
+		 * @returns {DDom}
+		 */
+		setDataset: function(name, data) {
+			this.slice(0).forEach(function(element) {
+				if (element.nodeType === 1) {
+					element.dataset[name] = data;
+				}
+			});
+
+			return this;
+		},
+
+		/**
 		 * Set element css width
 		 * @param {string} width
+		 * @return {DDom}
 		 */
 		setWidth: function(width) {
-			this[0].style.width = width;
+			this.slice(0).forEach(function(element) {
+				element.style.width = width;
+			});
+
+			return this;
 		},
 
 		/**
@@ -1477,6 +1514,10 @@ var DDomEvent;
 		 * @returns {number}
 		 */
 		getHeight: function(margin) {
+			if (this.length === 0) {
+				return 0;
+			}
+
 			var style,
 				calc = this[0].offsetHeight || this[0].outerHeight || 0;
 
@@ -1490,23 +1531,16 @@ var DDomEvent;
 		},
 
 		/**
-		 * Log error to server via FW.logError
-		 * @private
-		 * @param DDomMessage
-		 * @param message
-		 * @param fileName
-		 * @param lineNumber
-		 */
-		logError: function(DDomMessage, message, fileName, lineNumber) {
-			FW.logError(DDomMessage + " " + message, fileName, lineNumber, null);
-		},
-
-		/**
 		 * Get element offsetHeight
 		 * @param {string} height
+		 * @return {DDom}
 		 */
 		setHeight: function(height) {
-			this[0].style.height = height;
+			this.slice(0).forEach(function(element) {
+				element.style.height = height;
+			});
+
+			return this;
 		}
 	};
 
@@ -1519,6 +1553,7 @@ var DDomEvent;
 	};
 
 	/**
+	 * @name DDom
 	 * @global
 	 * @function
 	 * @returns {DDom}
@@ -1527,7 +1562,7 @@ var DDomEvent;
 
 	/**
 	 * Get new DDom instance
-	 * @function
+	 * @name $DDom
 	 * @param {string|HTMLElement|Node|NodeList|HTMLCollection|DDom|DocumentFragment} [selector]
 	 * @param {Object} [options]
 	 * @returns {DDom}
@@ -1538,6 +1573,7 @@ var DDomEvent;
 
 	/**
 	 * @function
+	 * @memberOf $DDom.qs
 	 * @returns {DDom}
 	 */
 	$DDom.qs = function(search) {
@@ -1546,6 +1582,7 @@ var DDomEvent;
 
 	/**
 	 * @function
+	 * @memberOf $DDom.qsAll
 	 * @returns {DDom}
 	 */
 	$DDom.qsAll = function(search) {
@@ -1554,6 +1591,7 @@ var DDomEvent;
 
 	/**
 	 * @function
+	 * @memberOf $DDom.getId
 	 * @returns {DDom}
 	 */
 	$DDom.getId = function(search) {
@@ -1562,6 +1600,7 @@ var DDomEvent;
 
 	/**
 	 * @function
+	 * @memberOf $DDom.getTag
 	 * @returns {DDom}
 	 */
 	$DDom.getTag = function(search) {
@@ -1570,6 +1609,7 @@ var DDomEvent;
 
 	/**
 	 * @function
+	 * @memberOf $DDom.getClass
 	 * @returns {DDom}
 	 */
 	$DDom.getClass = function(search) {
