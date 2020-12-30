@@ -1,24 +1,38 @@
-/**
+/*!
  * DDom.js - Documented document object model
- * The DOM library that whines
+ * https://github.com/misamu/ddom.js
  *
+ * Licence: MIT
+ */
+
+/**
  * Support:
- *		Chrome 36
- *		Edge 12
- *		Firefox (Gecko) 6
- *		Internet Explorer 11
- *		Opera 23
- *		Safari 7.1
+ *		Chrome 55
+ *		Edge 18
+ *		Firefox (Gecko) 50
+ *		Opera 42
+ *		Safari 11
  */
 
 /*global HTMLCollection,Node,CustomEvent,NodeList */
 //noinspection JSUnusedGlobalSymbols
 
+'use strict'; // jshint ignore:line
+
+/**
+ * @typedef {{
+ *		fileName: string
+ *		lineNumber: number,
+ *		message: string,
+ *		name: string,
+ *		stack: string
+ * }} DOMException
+ */
+
 /**
  * @typedef {{
  *		target: DDom,
- *		delegateTarget: DDom,
- *		currentTarget: DDom
+ *		delegateTarget: DDom
  * }} DDomEventElements
  */
 
@@ -30,24 +44,18 @@
 /**
  * DDom HTML helper
  */
-(function(window) {
-	var eventCache = new window.WeakMap();
-
-	// Fix Element.prototype.matches to older browsers
-	(function(ElementPrototype) {
-		//noinspection JSUnresolvedVariable
-		/**
-		 * Matches selector
-		 * @function
-		 */
-		ElementPrototype.matches =
-			ElementPrototype.matches ||
-			ElementPrototype.matchesSelector ||
-			ElementPrototype.mozMatchesSelector ||
-			ElementPrototype.msMatchesSelector ||
-			ElementPrototype.oMatchesSelector ||
-			ElementPrototype.webkitMatchesSelector;
-	}(window.Element.prototype));
+(function(/*Window*/window) {
+	/**
+	 * @type {WeakMap<HTMLElement, Set<{
+	 *			event: string,
+	 *			callback: function,
+	 *			binder: function,
+	 *			once: boolean,
+	 *			capture: boolean
+	 *		}>
+	 *	>}
+	 */
+	const handlerCache = new window.WeakMap();
 
 	/**
 	 * DDom constructor
@@ -56,9 +64,7 @@
 	 * @param {Object} [options]
 	 * @returns {DDom}
 	 */
- 	var DDom = function(element, options) {
-		var x, l;
-
+	function DDom(element, options) {
 		if (element !== undefined && element !== null && element !== "") {
 			if (typeof element === "string") {
 				this.length++;
@@ -73,8 +79,8 @@
 			}
 
 			if (element instanceof HTMLCollection || element instanceof NodeList) {
-				this.length = l = element.length;
-				for (x = 0; x < l; x += 1) {
+				let length = this.length = element.length;
+				for (let x = 0; x < length; x += 1) {
 					this[x] = element[x];
 				}
 			} else if (element === window) {
@@ -84,15 +90,146 @@
 		}
 
 		return this;
-	};
+	}
 
-	//noinspection JSUnusedGlobalSymbols
+	/**
+	 * @param {HTMLElement} element
+	 * @param {string} type
+	 * @param {function} callback
+	 * @param {Event} event
+	 */
+	function createEventBind(element, type, callback, event) {
+		try {
+			if (callback.call(element, event, new DDom(event.target)) === false) {
+				event.preventDefault();
+				event.stopPropagation();
+			}
+		} catch(/*DOMException*/e) {
+			// $DDom.ce customEvent error is bit different
+			if (event instanceof CustomEvent) {
+				DDom.prototype.consoleError(`eventBind [DDom.ce:${type}] [${e.name}:${e.message}] [${e.fileName}:${e.lineNumber}]`);
+			} else {
+				DDom.prototype.consoleError(`eventBind [${type}] - ${e.name}:${e.message}`);
+			}
+
+			event.preventDefault();
+			event.stopPropagation();
+		}
+
+		const handlers = handlerCache.get(element);
+		for (let handler of handlers) {
+			if (handler.callback === callback && handler.once) {
+				element.removeEventListener(handler.event, handler.binder, handler.capture);
+
+				// Clear handler from handler and remove whole WeakMap reference if there are no more events
+				handlers.delete(handler);
+				if (handlers.size === 0) {
+					handlerCache.delete(element);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Handle event binding and setting to cache for removal of events
+	 * @private
+	 * @param {HTMLElement} element
+	 * @param {{
+	 *		event: string,
+	 *		callback: Function,
+	 *		binder: function,
+	 *		once: boolean,
+	 *		capture: boolean
+	 * }} handle
+	 */
+	function handleEventBinding(element, handle) {
+		element.addEventListener(handle.event, handle.binder, {capture: handle.capture, once: handle.once});
+
+		if (handlerCache.has(element)) {
+			handlerCache.get(element).add(handle);
+		} else {
+			handlerCache.set(element, new Set([handle]));
+		}
+	}
+
+	/**
+	 * Handle on bind events
+	 * @param {DDom} element
+	 * @param {DDom|HTMLElement} delegateTarget
+	 * @param {boolean} hasElements
+	 * @param {string} data
+	 * @param {function(Event, DDomEventElements)} callback
+	 * @param {Event} event
+	 */
+	function createOnBinding(element, delegateTarget, hasElements, data, callback, event) {
+		/**
+		 * @type {HTMLElement}
+		 */
+		const clicked = /**@type {HTMLElement}*/(event.target);
+
+		const elements = {
+			target: new DDom(event.target),
+			delegateTarget: new DDom(delegateTarget)
+		};
+
+		if (hasElements) {
+			// Check that matches function is found from element and do matching - document does not have
+			if (clicked.matches && clicked.matches(data)) {
+				try {
+					if (callback.call(clicked, event, elements) === false) {
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				} catch(/*DOMException*/e1) {
+					//noinspection JSUnresolvedFunction
+					element.consoleError(`on[1] [${e1.name}: ${e1.message}] [Element: ${data}]`);
+					element.consoleError(`on[1] [Stack: ${e1.stack}]`);
+
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			} else {
+				elements.target = elements.target.closest(data, delegateTarget);
+
+				if (elements.target.length > 0) {
+					try {
+						if (callback.call(elements.target[0], event, elements) === false) {
+							event.preventDefault();
+							event.stopPropagation();
+						}
+					} catch(/*DOMException*/e2) {
+						//noinspection JSUnresolvedFunction
+						element.consoleError(`on[2] [${e2.name}: ${e2.message}] [Element: ${data}]`);
+						element.consoleError(`on[2] [Stack: ${e2.stack}]`);
+						event.preventDefault();
+						event.stopPropagation();
+					}
+				}
+			}
+
+		} else {
+			try {
+				if (callback.call(event.target, event, elements) === false) {
+					event.preventDefault();
+					event.stopPropagation();
+				}
+			} catch(/*DOMException*/e3) {
+				//noinspection JSUnresolvedFunction
+				element.consoleError(`on[3] [${e3.name}: ${e3.message}] [Element: ${data}]`);
+				element.consoleError(`on[3] [Stack: ${e3.stack}]`);
+
+				event.preventDefault();
+				event.stopPropagation();
+			}
+		}
+	}
+
 	/**
 	 * DDom prototype
 	 */
 	DDom.prototype = /**@lends {DDom.prototype}*/{
-		version: 0.2,
-		DDom: true,
+		version: 0.3,
+		isDDom: true,
 		length: 0,
 		slice: Array.prototype.slice,
 		splice: Array.prototype.splice,
@@ -107,17 +244,15 @@
 
 		/**
 		 * Push new elements to this object
-		 * @param {HTMLElement|NodeList|HTMLCollection|Node|DDom} elements
+		 * @param {HTMLElement|NodeList|HTMLCollection|Node|DDom|Array<Node>} elements
 		 */
 		push: function(elements) {
-			var x;
-
-			if (elements.DDom) {
+			if (elements.isDDom) {
 				elements = elements.getAll();
 			}
 
 			if (Array.isArray(elements) || elements instanceof HTMLCollection) {
-				for(x = 0; x < elements.length; x++) {
+				for(let x = 0; x < elements.length; x++) {
 					this[this.length++] = elements[x];
 				}
 
@@ -147,14 +282,22 @@
 
 		/**
 		 * Get all current elements as document fragment
+		 * @param {boolean} [clone=false]
 		 * @returns {DocumentFragment}
 		 */
-		getFragment: function() {
-			var frag = document.createDocumentFragment();
+		getFragment: function(clone) {
+			const frag = document.createDocumentFragment();
 
-			this.slice(0).forEach(function(element) {
-				frag.appendChild(element);
-			});
+			if (clone === true) {
+				for (const element of this.slice(0)) {
+					frag.appendChild(element.cloneNode(true));
+				}
+
+			} else {
+				for (const element of this.slice(0)) {
+					frag.appendChild(element);
+				}
+			}
 
 			return frag;
 		},
@@ -163,7 +306,7 @@
 		 * Get all nodes of this object
 		 * Return value is really just and array but is masked to NodeList for better doc handling and has all
 		 * the methods that exists in arrays too
-		 * @returns {NodeList}
+		 * @returns {Array<Node>}
 		 */
 		getAll: function() {
 			return this.slice(0);
@@ -182,40 +325,24 @@
 		 * Click event binding to element
 		 * @param {string} type
 		 * @param {Function} callback
-		 * @param {boolean} [useCapture]
+		 * @param {boolean} [useCapture=false]
+		 * @param {boolean} [once=false]
 		 * @return {DDom}
 		 */
-		eventBind: function(type, callback, useCapture) {
-			var items = this.slice(0),
-				x, element, handle;
+		eventBind: function(type, callback, useCapture, once) {
+			const items = this.slice(0);
+			for (let x = 0; x < items.length; x++) {
+				let element = items[x];
 
-			var eventHandler = function (type, callback, event) {
-				try {
-					if (callback.call(this, event, new DDom(event.target)) === false) {
-						event.preventDefault();
-						event.stopPropagation();
-					}
-				} catch(/*Error*/e) {
-					type = (event instanceof CustomEvent) ? type + ' / ' + event.detail[0] : type;
-
-					DDom.prototype.consoleError(`eventBind [${type}] - ${e.name}:${e.message} [Function: ${callback.toString()}]`);
-
-					event.preventDefault();
-					event.stopPropagation();
-				}
-			};
-
-			for (x = 0; x < items.length; x++) {
-				element = items[x];
-
-				handle = {
+				const handle = {
 					event: type,
-					capture: !!useCapture,
+					once: once === true,
+					capture: useCapture === true,
 					callback: callback,
-					f: eventHandler.bind(element, type, callback)
+					binder: createEventBind.bind(null, element, type, callback)
 				};
 
-				this.eventBindCache(element, handle);
+				handleEventBinding(element, handle);
 			}
 
 			return this;
@@ -228,36 +355,7 @@
 		 * @return {DDom}
 		 */
 		eventClick: function(callback, useCapture) {
-			var items = this.slice(0),
-				x, element, handle;
-
-			var eventHandler = function(callback, event) {
-				try {
-					if (callback.call(this, event, new DDom(event.target)) === false) {
-						event.preventDefault();
-						event.stopPropagation();
-					}
-				} catch(/*Error*/e) {
-					DDom.prototype.consoleError(`eventClick - [${e.name}: ${e.message}] [Function: ${callback.toString()}]`);
-					event.preventDefault();
-					event.stopPropagation();
-				}
-			};
-
-			for (x = 0; x < items.length; x++) {
-				element = items[x];
-
-				handle = {
-					event: 'click',
-					capture: !!useCapture,
-					callback: callback,
-					f: eventHandler.bind(element, callback)
-				};
-
-				this.eventBindCache(element, handle);
-			}
-
-			return this;
+			return this.eventBind('click', callback, useCapture);
 		},
 
 		/**
@@ -268,60 +366,27 @@
 		 * @return {DDom}
 		 */
 		eventOnce: function(type, callback, useCapture) {
-			var items = this.slice(0),
-				x, element, handle;
-
-			var eventHandler = function (callback, event) {
-				try {
-					if (callback.call(this, event, new DDom(event.target)) === false) {
-						event.preventDefault();
-						event.stopPropagation();
-					}
-				} catch(/*Error*/e) {
-					DDom.prototype.consoleError(`eventOnce - [${e.name}: ${e.message}] [Function: ${callback.toString()}]`);
-					event.preventDefault();
-					event.stopPropagation();
-				}
-
-				this.removeEventListener(type, handle.f);
-			};
-
-			for (x = 0; x < items.length; x++) {
-				element = items[x];
-
-				handle = {
-					event: type,
-					capture: !!useCapture,
-					callback: callback,
-					f: eventHandler.bind(element, callback)
-				};
-
-				this.eventBindCache(element, handle);
-			}
-
-			return this;
+			return this.eventBind(type, callback, useCapture, true);
 		},
 
 		/**
 		 * Bind event listener
 		 * @param {(string|Array)} events
 		 * @param {(string|Array|Function)} data
-		 * @param {Function} [callback]
+		 * @param {function(Event, DDomEventElements)} [callback]
 		 * @param {boolean} [useCapture]
 		 * @return {DDom}
 		 */
 		on: function(events, data, callback, useCapture) {
-			var elements = [],
-				hasElements = false,
-				x;
+			let hasElements = false;
 
 			if (this.length === 0) {
-				this.consoleError(`Event::on - No elements to bind data ${this.on.caller.toString()}`);
+				this.consoleError(`Event::on - No elements bind [Events: ${JSON.stringify(events)}] [Data: ${JSON.stringify(data)}]`);
 				return null;
 			}
 
 			if (this.length > 1) {
-				this.consoleError(`Event::on - Multiple elements to bind data ${this.on.caller.toString()}`);
+				this.consoleError(`Event::on - Multiple elements bind [Events: ${JSON.stringify(events)}] [Data: ${JSON.stringify(data)}]`);
 				return null;
 			}
 
@@ -333,118 +398,25 @@
 			}
 
 			if (typeof callback !== "function") {
-				this.consoleError(`Event::on - did not get valid callback function ${this.on.caller.toString()}`);
+				this.consoleError(`Event::on - No valid callback [Events: ${JSON.stringify(events)}] [Data: ${JSON.stringify(data)}]`);
 				return null;
 			}
 
 			events = events.split(" ");
-			for (x = 0; x < events.length; x++) {
-				var handle = {
+			for (let x = 0; x < events.length; x++) {
+				const handle = {
 					event: events[x],
+					once: false,
 					// If focus or blur event then useCapture set true - firefox does not work otherwise
-					capture: (events[x] === 'blur' || events[x] === 'focus' || !!useCapture),
-					callback: callback,
-					f: this.onEventHandler.bind(this, this[0], hasElements, data, callback)
+					capture: (events[x] === 'blur' || events[x] === 'focus' || useCapture),
+					binder: createOnBinding.bind(null, this, this[0], hasElements, data, callback),
+					callback: callback
 				};
 
-				this.eventBindCache(this[0], handle);
+				handleEventBinding(this[0], handle);
 			}
 
 			return this;
-		},
-
-		/**
-		 * Handle on bind events
-		 * @private
-		 * @param {DDom|HTMLElement} delegateTarget
-		 * @param {boolean} hasElements
-		 * @param {string} data
-		 * @param {Function} callback
-		 * @param {Event} event
-		 */
-		onEventHandler: function(delegateTarget, hasElements, data, callback, event) {
-			/**
-			 * @type {HTMLElement}
-			 */
-			var clicked = /**@type {HTMLElement}*/(event.target);
-
-			var elements = {};
-
-			if (hasElements) {
-				// Check that matches function is found from element and do matching - document does not have
-				if (clicked.matches && clicked.matches(data)) {
-					elements.target = new DDom(event.target);
-					elements.delegateTarget = new DDom(delegateTarget);
-					elements.currentTarget = elements.target;
-
-					try {
-						if (callback.call(clicked, event, elements) === false) {
-							event.preventDefault();
-							event.stopPropagation();
-						}
-					} catch(/*Error*/e1) {
-						//noinspection JSUnresolvedFunction
-						this.consoleError(`on[1] - [${e1.name}: ${e1.message}] [Element: ${data}] [Function: ${callback.toString()}]`);
-						event.preventDefault();
-						event.stopPropagation();
-					}
-				} else {
-					elements.target = new DDom(clicked);
-					elements.currentTarget = elements.target.closest(data, delegateTarget);
-
-					if (elements.currentTarget.hasElements()) {
-						elements.delegateTarget = new DDom(delegateTarget);
-						try {
-							if (callback.call(event.target, event, elements) === false) {
-								event.preventDefault();
-								event.stopPropagation();
-							}
-						} catch(/*Error*/e2) {
-							//noinspection JSUnresolvedFunction
-							this.consoleError(`on[2] - [${e2.name}: ${e2.message}] [Element: ${data}] [Function: ${callback.toString()}]`);
-							event.preventDefault();
-							event.stopPropagation();
-						}
-					}
-				}
-
-			} else {
-				elements.target = new DDom(event.target);
-				elements.delegateTarget = new DDom(delegateTarget);
-				elements.currentTarget = elements.target;
-
-				try {
-					if (callback.call(event.target, event, elements) === false) {
-						event.preventDefault();
-						event.stopPropagation();
-					}
-				} catch(/*Error*/e3) {
-					//noinspection JSUnresolvedFunction
-					this.consoleError(`on[3] - [${e3.name}: ${e3.message}] [Element: ${data}] [Function: ${callback.toString()}]`);
-					event.preventDefault();
-					event.stopPropagation();
-				}
-			}
-		},
-
-		/**
-		 * Handle event binding and setting to cache for removal of events
-		 * @private
-		 * @param {HTMLElement} element
-		 * @param {{
-		 *		event: string,
-		 *		f: Function,
-		 *		capture: boolean
-		 * }} handle
-		 */
-		eventBindCache: function(element, handle) {
-			element.addEventListener(handle.event, handle.f, handle.capture);
-
-			if (eventCache.has(element)) {
-				eventCache.get(element).push(handle);
-			} else {
-				eventCache.set(element, [handle]);
-			}
 		},
 
 		/**
@@ -454,29 +426,25 @@
 		 * @return {DDom}
 		 */
 		off: function(eventType, func) {
-			this.slice(0).forEach(function(element) {
-				var handles, x, keep = [];
+			for (const element of this.slice(0)) {
+				if (handlerCache.has(element)) {
+					const handlers = handlerCache.get(element);
 
-				if (eventCache.has(element)) {
-					handles = eventCache.get(element);
+					for (const handler of handlers) {
+						if ((eventType === undefined || eventType === handler.event) &&
+								(func === undefined || func === handler.callback)) {
 
-					for (x = 0; x < handles.length; x++) {
-						if ((eventType === undefined || eventType === handles[x].event) &&
-								(func === undefined || func === handles[x].callback)) {
-							element.removeEventListener(handles[x].event, handles[x].f, handles[x].capture);
-						} else {
-							keep.push(handles[x]);
+							element.removeEventListener(handler.event, handler.binder, handler.capture);
+							handlers.delete(handler);
 						}
 					}
 
 					// If only given eventType was removed, then check if there is still events bind and keep those
-					if (keep.length > 0) {
-						eventCache.set(element, keep);
-					} else {
-						eventCache.delete(element);
+					if (handlers.size === 0) {
+						handlerCache.delete(element);
 					}
 				}
-			});
+			}
 
 			return this;
 		},
@@ -487,7 +455,7 @@
 		 * @param {Array} args
 		 */
 		trigger: function(event, args) {
-			var eventObject;
+			let eventObject;
 
 			if (typeof CustomEvent === "function") {
 				eventObject = new CustomEvent(event, /** @type CustomEventInit*/({bubbles: true, cancellable: true, detail: args}));
@@ -497,11 +465,12 @@
 				eventObject.initCustomEvent(event, true, true, args);
 			}
 
+			// noinspection JSUndefinedPropertyAssignment
 			eventObject.eventName = event;
 
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				element.dispatchEvent(eventObject);
-			});
+			}
 		},
 
 		/**
@@ -509,19 +478,17 @@
 		 * @return {DDom}
 		 */
 		clear: function() {
-			var clone;
-
-			this.slice(0).forEach(function(element, offset) {
-				var parent = element.parentNode;
+			for (const [index, element] of this.slice(0).entries()) {
+				const parent = element.parentNode;
 
 				// If node has been removed from the tree then there is no parentNode
 				if (parent !== null) {
-					clone = element.cloneNode(false);
+					const clone = element.cloneNode(false);
 					parent.replaceChild(clone, element);
 
-					this[offset] = clone;
+					this[index] = clone;
 				}
-			}.bind(this));
+			}
 
 			return this;
 		},
@@ -532,11 +499,11 @@
 		 * @return {DDom}
 		 */
 		clone: function(deep) {
-			var clone = new DDom();
+			const clone = new DDom();
 
-			this.slice(0).forEach(function(element) {
-				clone.push(element.cloneNode(!!deep));
-			}.bind(this));
+			for (const element of this.slice(0)) {
+				clone.push(element.cloneNode(deep === true));
+			}
 
 			return clone;
 		},
@@ -546,9 +513,9 @@
 		 * @return {DDom}
 		 */
 		empty: function() {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				element.innerHTML = "";
-			}.bind(this));
+			}
 
 			return this;
 		},
@@ -566,105 +533,112 @@
 		},
 
 		/**
-		 * Add HTML node after given element
+		 * Parse DDom Node or string to return Node element
+		 * @param {DDom|Node|string} node
+		 * @return Node
+		 */
+		parseToNode: function(node) {
+			if (node instanceof DDom) {
+				switch (node.length) {
+					case 1:
+						return node[0];
+
+					case 0:
+						return document.createTextNode('');
+
+					default:
+						return node.getFragment();
+				}
+			}
+
+			if (node instanceof Node) {
+				return node;
+			}
+
+			if (typeof node === 'string') {
+				return document.createTextNode(node);
+			}
+		},
+
+		/**
+		 * Add Node after first element in DDom. This will keep events
 		 * @param {(DDom|HTMLElement|Node)} node
 		 * @return {DDom}
 		 */
 		after: function(node) {
-			if (node.DDom) {
-				// If there is nothing to append - bail out
-				if (node.length === 0) {
-					return this;
-				}
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
 
-				node = (node.length > 1) ? node.getFragment() : node[0];
+				this[0].parentNode.insertBefore(node, this[0].nextSibling);
 			}
-
-			this.slice(0).forEach(function(element) {
-				element.parentNode.insertBefore(node, element.nextSibling);
-			});
 
 			return this;
 		},
 
 		/**
-		 * Add HTML node before given element
+		 * Add Node before first element in DDom. This will keep events
 		 * @param {DDom|HTMLElement|Node} node
 		 * @return {DDom}
 		 */
 		before: function(node) {
-			if (node.DDom) {
-				// If there is nothing to append - bail out
-				if (node.length === 0) {
-					return this;
-				}
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
 
-				node = (node.length > 1) ? node.getFragment() : node[0];
+				this[0].parentNode.insertBefore(node, this[0]);
 			}
-
-			this.slice(0).forEach(function(element) {
-				element.parentNode.insertBefore(node, element);
-			});
 
 			return this;
 		},
 
 		/**
-		 * Append child to node
+		 * Append child Node to first element in DDom. This will keep events
 		 * @param {Node|DDom|string|number} node
 		 * @return {DDom}
 		 */
 		append: function(node) {
-			if (typeof node === "string" || typeof node === "number") {
-				return this.addText(node);
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
+
+				this[0].appendChild(node);
 			}
-
-			if (node.DDom) {
-				// If there is nothing to node - bail out
-				if (node.length === 0) {
-					return this;
-				}
-
-				node = (node.length > 1) ? node.getFragment() : node[0];
-			}
-
-			this.slice(0).forEach(function(element) {
-				element.appendChild(node);
-			});
 
 			return this;
 		},
 
 		/**
-		 * Prepend data before element
-		 * @param {DDom|string} prepend
+		 * Prepend given data before first element in DDom. This will keep events
+		 * @param {DDom|Node|string} node
 		 * @returns {DDom}
 		 */
-		prepend: function(prepend) {
-			var data = (prepend.DDom) ? prepend.get() : document.createTextNode(prepend);
+		prepend: function(node) {
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
 
-			this.slice(0).forEach(function(element) {
-				element.insertBefore(data, element.firstChild);
-			});
+				this[0].insertBefore(node, this[0].firstChild);
+			}
 
 			return this;
 		},
 
 		/**
-		 * Replace current element with given data
-		 * @param {Node|DDom} newNode
+		 * Replace first element in DDom with given element. This will keep events
+		 * @param {DDom|Node|string} node
 		 * @return {DDom}
 		 */
-		replace: function(newNode) {
-			var replace;
-
-			newNode = (newNode instanceof Node) ? newNode : newNode[0];
-
+		replace: function(node) {
 			if (this.length > 0) {
-				replace = this[0].parentNode;
+				const parent = this[0].parentNode;
 
-				if (replace !== null) {
-					replace.replaceChild(newNode, this[0]);
+				if (parent !== null) {
+					// Parse parameter Node element
+					node = this.parseToNode(node);
+
+					parent.replaceChild(node, this[0]);
+					this[0] = node;
 				}
 			}
 
@@ -672,19 +646,24 @@
 		},
 
 		/**
-		 * Replace all elements with given element - this does not copy any event listeners already bind
-		 * @param {Node|DDom} newNode
+		 * Replace all elements with given data using cloneNode that will loose events
+		 * @param {DDom|Node|string} node
 		 * @return {DDom}
 		 */
-		replaceAll: function(newNode) {
-			newNode = (newNode instanceof Node) ? newNode : newNode[0];
+		replaceAll: function(node) {
+			node = this.parseToNode(node);
 
-			this.slice(0).forEach(function(replace) {
-				var parent = replace.parentNode;
+			for (const [index, replace] of this.slice(0).entries()) {
+				const parent = replace.parentNode;
+
 				if (parent !== null) {
-					parent.replaceChild(newNode.cloneNode(true), replace);
+					// clone node so all elements can use it and each index has it's own elements
+					const cloneNode = node.cloneNode(true);
+
+					parent.replaceChild(cloneNode, replace);
+					this[index] = cloneNode;
 				}
-			});
+			}
 
 			return this;
 		},
@@ -701,23 +680,23 @@
 		 * @returns {HTMLElement}
 		 */
 		ce: function(element, parameters) {
-			var ret = document.createElement(element);
+			const ret = document.createElement(element);
 
-			parameters = parameters || {};
+			parameters = parameters || Object.create(null);
 
-			Object.keys(parameters).forEach(function(key) {
+			for (const key of Object.keys(parameters)) {
 				if (key === "event") {
 					if (Array.isArray(parameters[key])) {
-						parameters[key].forEach(function(/*{type:string, action:Function}*/data) {
+						for (const data of parameters[key]) {
 							ret.addEventListener(data.type, /**string*/data.action);
-						});
+						}
 					} else {
 						ret.addEventListener(parameters[key].type, parameters[key].action);
 					}
 				} else {
 					ret.setAttribute(key, parameters[key]);
 				}
-			});
+			}
 
 			return ret;
 		},
@@ -729,13 +708,8 @@
 		 * @returns {DDom}
 		 */
 		closest: function(tag, until) {
-			/**
-			 * @type {Element|Node}
-			 */
-			var element;
-
 			if (this[0]) {
-				element = this[0];
+				let element = this[0];
 
 				do {
 					if (element.nodeType === 1 && element.matches(tag)) {
@@ -761,13 +735,8 @@
 		 * @returns {DDom}
 		 */
 		closestClass: function(className) {
-			/**
-			 * @type {Node|Element}
-			 */
-			var element;
-
 			if (this[0]) {
-				element = this[0];
+				let element = this[0];
 
 				do {
 					if (element.classList) {
@@ -792,7 +761,7 @@
 		/**
 		 * QuerySelector search
 		 * @param {string} search
-		 * @param {(HTMLElement|HTMLDocument)} [secondElement]
+		 * @param {HTMLElement|Document} [secondElement]
 		 * @returns {DDom}
 		 */
 		qs: function(search, secondElement) {
@@ -806,7 +775,7 @@
 		/**
 		 * QuerySelector search
 		 * @param {string} search
-		 * @param {(HTMLElement|HTMLDocument)} [secondElement]
+		 * @param {HTMLElement|Document} [secondElement]
 		 * @return {DDom}
 		 */
 		qsAll: function(search, secondElement) {
@@ -824,9 +793,9 @@
 		 */
 		contains: function(search) {
 			// IE fix where document does not have contains function so go to document.body
-			var node = (this[0] === document) ? document.body : this[0];
+			const node = (this[0] === document) ? document.body : this[0];
 
-			search = (search.DDom) ? search.get() : search;
+			search = (search.isDDom) ? search.get() : search;
 
 			if (node && node.nodeType === 1) {
 				// Because IE does not have contains in document we have to always handle document.body because
@@ -845,6 +814,25 @@
 		focus: function() {
 			if (this[0] && this[0].nodeType === 1) {
 				this[0].focus();
+
+				// Set cursor to the end
+				const length = this[0].value.length;
+				this[0].setSelectionRange(length, length);
+			}
+
+			return this;
+		},
+
+		/**
+		 * Set focus to first focusable element
+		 * @return {DDom}
+		 */
+		focusFirstFocusable: function() {
+			const focusable = this.qsAll('a:not([disabled]), button:not([disabled]), input:not([disabled]),' +
+					' [tabindex]:not([disabled]):not([tabindex="-1"])');
+
+			if (focusable.length > 0) {
+				focusable[0].focus();
 			}
 
 			return this;
@@ -856,9 +844,9 @@
 		 * @return {DDom}
 		 */
 		forEach: function(callback) {
-			this.slice(0).forEach(function(element, index) {
+			for (const [index, element] of this.slice(0).entries()) {
 				callback.call(element, element, index);
-			});
+			}
 
 			return this;
 		},
@@ -869,11 +857,11 @@
 		 * @return {Array}
 		 */
 		map: function(callback) {
-			var ret = [];
+			const ret = [];
 
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				ret.push(callback.call(element, element));
-			});
+			}
 
 			return ret;
 		},
@@ -884,13 +872,13 @@
 		 * @return {DDom}
 		 */
 		css: function(attributes) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.nodeType === 1) {
-					Object.keys(attributes).forEach(function(key) {
+					for (const key of Object.keys(attributes)) {
 						element.style[key] = attributes[key];
-					});
+					}
 				}
-			});
+			}
 
 			return this;
 		},
@@ -900,7 +888,7 @@
 		 * @returns {DDom}
 		 */
 		parent: function(steps) {
-			var element;
+			let element;
 
 			steps = steps || 1;
 
@@ -932,13 +920,13 @@
 		 * @returns {DDom}
 		 */
 		matchesAll: function(attribute) {
-			var matching = new DDom();
+			const matching = new DDom();
 
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.nodeType === 1 && element.matches(attribute)) {
 					matching.push(element);
 				}
-			});
+			}
 
 			return matching;
 		},
@@ -948,10 +936,8 @@
 		 * @returns {DDom}
 		 */
 		next: function() {
-			var element;
-
 			if (this[0] && this[0].nodeType === 1) {
-				element = this[0].nextElementSibling;
+				let element = this[0].nextElementSibling;
 				if (element !== null) {
 					return new DDom(element);
 				}
@@ -965,10 +951,8 @@
 		 * @returns {DDom}
 		 */
 		last: function() {
-			var element;
-
 			if (this[0] && this[0].nodeType === 1) {
-				element = this[0].lastElementChild;
+				let element = this[0].lastElementChild;
 				if (element !== null) {
 					return new DDom(element);
 				}
@@ -982,10 +966,8 @@
 		 * @returns {DDom}
 		 */
 		prev: function() {
-			var element;
-
 			if (this[0] && this[0].nodeType === 1) {
-				element = this[0].previousElementSibling;
+				let element = this[0].previousElementSibling;
 				if (element !== null) {
 					return new DDom(element);
 				}
@@ -1008,11 +990,10 @@
 		 * @returns {DDom}
 		 */
 		putCursorAtEnd: function() {
-			var element = this[0] || {};
+			const element = this[0] || {};
 
 			if (element.nodeType === 1) {
-				var value = this.getVal(),
-					length = value.length;
+				const length = this.getVal().length;
 
 				// Check if required element has already focus - if yes then don't refocus because it might break stuff like suggestSearch
 				if (document.activeElement !== this) {
@@ -1030,6 +1011,7 @@
 
 					// Scroll to the bottom, in case we're in a tall textarea
 					// (Necessary for Firefox and Google Chrome)
+					// noinspection JSUnusedGlobalSymbols
 					this.scrollTop = 999999;
 				}
 			}
@@ -1043,9 +1025,9 @@
 		 * @returns {DDom}
 		 */
 		addText: function(text) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				element.appendChild(document.createTextNode(text));
-			});
+			}
 
 			return this;
 		},
@@ -1057,9 +1039,7 @@
 		 */
 		addClass: function(addClass) {
 			if (addClass !== "") {
-				this.slice(0).forEach(function(element) {
-					var elClass;
-
+				for (const element of this.slice(0)) {
 					// Check that handled element is Element
 					if (element.nodeType === 1) {
 						// Modern browsers have Element.classList
@@ -1067,30 +1047,15 @@
 							element.classList.add(addClass);
 
 						} else {
-							elClass = element.getAttribute("class");
+							const elClass = element.getAttribute("class");
 
 							if (elClass === null || elClass.split(' ').indexOf(addClass) === -1) {
 								element.setAttribute("class", elClass + " " + addClass);
 							}
 						}
 					}
-				});
+				}
 			}
-
-			return this;
-		},
-
-		/**
-		 * Add custom event trigger type
-		 * @param {string} type
-		 * @param {string} name
-		 * @return {DDom}
-		 */
-		addCustomEvent: function(type, name) {
-			this.slice(0).forEach(function(element) {
-				element.setAttribute('class', element.getAttribute('class') + ' data-custom');
-				element.setAttribute('data-custom', JSON.stringify({type: type, name: name}));
-			});
 
 			return this;
 		},
@@ -1101,10 +1066,7 @@
 		 * @return {DDom}
 		 */
 		toggleClass: function(className) {
-			var elementClass;
-
-			this.slice(0).forEach(function(element) {
-
+			for (const element of this.slice(0)) {
 				// Check that handled element is Element
 				if (element.nodeType === 1) {
 					// Modern browsers have Element.classList
@@ -1112,7 +1074,7 @@
 						element.classList.toggle(className);
 
 					} else {
-						elementClass = element.getAttribute("class");
+						let elementClass = element.getAttribute("class");
 
 						elementClass = (elementClass.indexOf(className) === -1) ? elementClass + " " + className :
 							elementClass.replace(className, '').replace(/ +/g, " ");
@@ -1120,9 +1082,22 @@
 						element.setAttribute('class', elementClass);
 					}
 				}
-			});
+			}
 
 			return this;
+		},
+
+		/**
+		 * Toggle button disabled state
+		 * @param {boolean} state
+		 * @return {DDom}
+		 */
+		buttonDisabled: function(state) {
+			for (const element of this.slice(0)) {
+				if (element.nodeName.toLowerCase() === "button") {
+					element.disabled = state;
+				}
+			}
 		},
 
 		/**
@@ -1146,27 +1121,23 @@
 		},
 
 		/**
-		 * Set innerHTML data or get if data is not set
-		 * @param {undefined|string|DDom|DocumentFragment} [data]
-		 * @return {DDom|string}
+		 * Set innerHTML data
+		 * @param {string|DDom|DocumentFragment} data
+		 * @return {DDom}
 		 */
 		html: function(data) {
-			if (data === undefined) {
-				return (this.length !== 0) ? this[0].innerHTML : "";
-			}
-
 			if (typeof data === "string" || typeof data === "number") {
-				this.slice(0).forEach(function(element) {
+				for (const element of this.slice(0)) {
 					element.innerHTML = data;
-				});
+				}
 
 			} else {
 				data = (data instanceof DDom) ? data.getFragment() : data;
 
-				this.slice(0).forEach(function(element) {
+				for (const element of this.slice(0)) {
 					element.innerHTML = "";
 					element.appendChild(data);
-				});
+				}
 			}
 
 			return this;
@@ -1177,11 +1148,11 @@
 		 * @returns {DDom}
 		 */
 		remove: function() {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.parentNode !== null) {
 					element.parentNode.removeChild(element);
 				}
-			});
+			}
 
 			this.length = 0;
 
@@ -1194,11 +1165,11 @@
 		 * @returns {DDom}
 		 */
 		removeAttr: function(attrName) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.nodeType === 1) {
 					element.removeAttribute(attrName);
 				}
-			});
+			}
 
 			return this;
 		},
@@ -1209,9 +1180,7 @@
 		 * @returns {DDom}
 		 */
 		removeClass: function(removeClass) {
-			var regEx;
-
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				// Check that handled element is Element
 				if (element.nodeType === 1) {
 					// Modern browsers have Element.classList
@@ -1219,11 +1188,12 @@
 						element.classList.remove(removeClass);
 
 					} else {
-						regEx = new RegExp(removeClass, 'ig');
-						element.setAttribute("class", (element.getAttribute("class") || "").replace(regEx, '').replace(/ {2}/g, ' '));
+						const regEx = new RegExp(removeClass, 'ig');
+						element.setAttribute("class", (element.getAttribute("class") || "")
+								.replace(regEx, '').replace(/ {2}/g, ' '));
 					}
 				}
-			});
+			}
 
 			return this;
 		},
@@ -1234,11 +1204,11 @@
 		 * @param {string|boolean|number} value
 		 */
 		setAttr: function(name, value) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.nodeType === 1) {
 					element.setAttribute(name, value);
 				}
-			});
+			}
 
 			return this;
 		},
@@ -1250,11 +1220,11 @@
 		 * @return {DDom}
 		 */
 		setCSS: function(key, value) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.nodeType === 1) {
 					element.style[key] = value;
 				}
-			});
+			}
 
 			return this;
 		},
@@ -1265,10 +1235,10 @@
 		 * @returns {DDom}
 		 */
 		setText: function(text) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				element.innerHTML = "";
 				element.appendChild(document.createTextNode(text));
-			});
+			}
 
 			return this;
 		},
@@ -1279,9 +1249,11 @@
 		 * @returns {DDom}
 		 */
 		setVal: function(value) {
-			this.slice(0).forEach(function(element) {
-				element.value = value;
-			});
+			for (const element of this.slice(0)) {
+				if (element instanceof HTMLInputElement) {
+					element.value = value;
+				}
+			}
 
 			return this;
 		},
@@ -1299,7 +1271,7 @@
 		/**
 		 * Get element attribute
 		 * @param {string} attr
-		 * @returns {string|null}
+		 * @return {String|Null}
 		 */
 		getAttr: function(attr) {
 			return (this.length !== 0) ? this[0].getAttribute(attr) : null;
@@ -1314,9 +1286,28 @@
 		},
 
 		/**
+		 * Get all children of first element as documentFragment
+		 * @returns {DocumentFragment}
+		 */
+		getChildrenFragment: function() {
+			const fragment = document.createDocumentFragment();
+
+			if (this[0] && this[0].nodeType === 1) {
+				const children = this[0].children;
+				const length = children.length;
+
+				for (let x = 0; x < length; x += 1) {
+					fragment.appendChild(children[0]);
+				}
+			}
+
+			return fragment;
+		},
+
+		/**
 		 * Get all children of first element
 		 * @param {string} name
-		 * @returns {string|null}
+		 * @returns {String|Null}
 		 */
 		getDataset: function(name) {
 			return (this[0]) ? this[0].dataset[name] : null;
@@ -1332,13 +1323,21 @@
 		},
 
 		/**
+		 * Get innerHTML data from first element and if not defined then empty string
+		 * @return {string}
+		 */
+		getInnerHTML: function() {
+			return (this.length !== 0) ? this[0].innerHTML : "";
+		},
+
+		/**
 		 * Get elements by class name
 		 * @param {string} cName
-		 * @param {(HTMLElement|HTMLDocument)} [secondElement]
+		 * @param {HTMLElement|Document} [secondElement]
 		 * @returns {DDom}
 		 */
 		getClass: function(cName, secondElement) {
-			var element = this[0] || secondElement;
+			const element = this[0] || secondElement;
 
 			if (element !== undefined) {
 				return new DDom(element.getElementsByClassName(cName));
@@ -1350,11 +1349,11 @@
 		/**
 		 * Get elements by tag name
 		 * @param {string} tagName
-		 * @param {(HTMLElement|HTMLDocument)} [secondElement]
+		 * @param {HTMLElement|Document} [secondElement]
 		 * @returns {DDom}
 		 */
 		getTag: function(tagName, secondElement) {
-			var element = this[0] || secondElement;
+			const element = this[0] || secondElement;
 
 			if (element !== undefined) {
 				return new DDom(element.getElementsByTagName(tagName));
@@ -1381,14 +1380,15 @@
 
 		/**
 		 * Get element position to relative parent or with parameter to viewPort
-		 * @param {boolean} [viewPort]
+		 * @param {boolean} [viewPort=false]
 		 * @returns {{top: number, left: number}}
 		 */
 		getPosition: function(viewPort) {
-		    var top = 0, left = 0,
-				element = this[0];
+			let element = this[0];
 
-			if (!!viewPort) {
+			if (viewPort) {
+				let top = 0, left = 0;
+
 				while (element) {
 				   if (element.tagName) {
 					   top = top + element.offsetTop - element.scrollTop;
@@ -1428,7 +1428,7 @@
 		 * @returns {boolean}
 		 */
 		hasClass: function(className) {
-			var element = this[0];
+			const element = this[0];
 
 			if (element && element.nodeType === 1) {
 				if (element.classList) {
@@ -1459,7 +1459,7 @@
 
 		/**
 		 * Get element offsetWidth
-		 * @param {boolean} [margin]
+		 * @param {boolean} [margin=false]
 		 * @returns {number}
 		 */
 		getWidth: function(margin) {
@@ -1467,11 +1467,10 @@
 				return 0;
 			}
 
-			var style,
-				calc = this[0].offsetWidth || this[0].outerWidth || 0;
+			let calc = this[0].offsetWidth || this[0].outerWidth || 0;
 
-			if (!!margin) {
-				style = window.getComputedStyle(this[0], null);
+			if (margin === true) {
+				const style = window.getComputedStyle(this[0], null);
 				calc += parseInt(style.marginLeft, 10) +
 						parseInt(style.marginRight, 10);
 			}
@@ -1486,11 +1485,11 @@
 		 * @returns {DDom}
 		 */
 		setDataset: function(name, data) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				if (element.nodeType === 1) {
 					element.dataset[name] = data;
 				}
-			});
+			}
 
 			return this;
 		},
@@ -1501,16 +1500,16 @@
 		 * @return {DDom}
 		 */
 		setWidth: function(width) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				element.style.width = width;
-			});
+			}
 
 			return this;
 		},
 
 		/**
 		 * Get element offsetHeight
-		 * @param {boolean} [margin]
+		 * @param {boolean} [margin=false]
 		 * @returns {number}
 		 */
 		getHeight: function(margin) {
@@ -1518,16 +1517,14 @@
 				return 0;
 			}
 
-			var style,
-				calc = this[0].offsetHeight || this[0].outerHeight || 0;
+			let calc = this[0].offsetHeight || this[0].outerHeight || 0;
 
-			if (!!margin) {
-				style = window.getComputedStyle(this[0], null);
-				calc += parseInt(style.marginTop, 10) +
-						parseInt(style.marginBottom, 10);
+			if (margin !== true) {
+				return calc;
 			}
 
-			return calc;
+			const style = window.getComputedStyle(this[0], null);
+			return calc + parseInt(style.marginTop, 10) + parseInt(style.marginBottom, 10);
 		},
 
 		/**
@@ -1536,44 +1533,35 @@
 		 * @return {DDom}
 		 */
 		setHeight: function(height) {
-			this.slice(0).forEach(function(element) {
+			for (const element of this.slice(0)) {
 				element.style.height = height;
-			});
+			}
 
 			return this;
 		}
 	};
 
 	/**
-	 * Convenience function to create DDom object that has documentFragment pre set
-	 * @returns {DDom}
+	 * @global $DDomFragment
+	 * @type {DDom}
 	 */
 	window.$DDomFragment = function() {
 		return new DDom(document.createDocumentFragment());
 	};
 
 	/**
-	 * @name DDom
-	 * @global
-	 * @function
-	 * @returns {DDom}
-	 */
-	window.DDom = DDom;
-
-	/**
 	 * Get new DDom instance
-	 * @name $DDom
+	 * @global
 	 * @param {string|HTMLElement|Node|NodeList|HTMLCollection|DDom|DocumentFragment} [selector]
 	 * @param {Object} [options]
 	 * @returns {DDom}
 	 */
-	window.$DDom = function(selector, options) {
+	let $DDom = function(selector, options) {
 		return new DDom(selector, options);
 	};
 
 	/**
 	 * @function
-	 * @memberOf $DDom.qs
 	 * @returns {DDom}
 	 */
 	$DDom.qs = function(search) {
@@ -1582,7 +1570,6 @@
 
 	/**
 	 * @function
-	 * @memberOf $DDom.qsAll
 	 * @returns {DDom}
 	 */
 	$DDom.qsAll = function(search) {
@@ -1591,7 +1578,6 @@
 
 	/**
 	 * @function
-	 * @memberOf $DDom.getId
 	 * @returns {DDom}
 	 */
 	$DDom.getId = function(search) {
@@ -1600,7 +1586,6 @@
 
 	/**
 	 * @function
-	 * @memberOf $DDom.getTag
 	 * @returns {DDom}
 	 */
 	$DDom.getTag = function(search) {
@@ -1609,11 +1594,25 @@
 
 	/**
 	 * @function
-	 * @memberOf $DDom.getClass
 	 * @returns {DDom}
 	 */
 	$DDom.getClass = function(search) {
 		return DDom.prototype.getClass(search, document);
 	};
+
+	/**
+	 * @function
+	 * @returns {boolean}
+	 */
+	$DDom.instanceOf = function(item) {
+		return item instanceof DDom;
+	};
+
+	/**
+	 * Set $DDom function to window
+	 * @global
+	 */
+	window.$DDom = $DDom;
+
 }(window));
 
