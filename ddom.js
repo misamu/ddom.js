@@ -289,12 +289,12 @@
 			const frag = document.createDocumentFragment();
 
 			if (clone === true) {
-				for (const element of this.slice(0)) {
+				for (const element of this) {
 					frag.appendChild(element.cloneNode(true));
 				}
 
 			} else {
-				for (const element of this.slice(0)) {
+				for (const element of this) {
 					frag.appendChild(element);
 				}
 			}
@@ -330,10 +330,7 @@
 		 * @return {DDom}
 		 */
 		eventBind: function(type, callback, useCapture, once) {
-			const items = this.slice(0);
-			for (let x = 0; x < items.length; x++) {
-				let element = items[x];
-
+			for (let element of this) {
 				const handle = {
 					event: type,
 					once: once === true,
@@ -426,7 +423,7 @@
 		 * @return {DDom}
 		 */
 		off: function(eventType, func) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (handlerCache.has(element)) {
 					const handlers = handlerCache.get(element);
 
@@ -468,7 +465,7 @@
 			// noinspection JSUndefinedPropertyAssignment
 			eventObject.eventName = event;
 
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				element.dispatchEvent(eventObject);
 			}
 		},
@@ -501,7 +498,7 @@
 		clone: function(deep) {
 			const clone = new DDom();
 
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				clone.push(element.cloneNode(deep === true));
 			}
 
@@ -513,7 +510,7 @@
 		 * @return {DDom}
 		 */
 		empty: function() {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				element.innerHTML = "";
 			}
 
@@ -859,7 +856,7 @@
 		map: function(callback) {
 			const ret = [];
 
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				ret.push(callback.call(element, element));
 			}
 
@@ -872,7 +869,7 @@
 		 * @return {DDom}
 		 */
 		css: function(attributes) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeType === 1) {
 					for (const key of Object.keys(attributes)) {
 						element.style[key] = attributes[key];
@@ -922,7 +919,7 @@
 		matchesAll: function(attribute) {
 			const matching = new DDom();
 
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeType === 1 && element.matches(attribute)) {
 					matching.push(element);
 				}
@@ -1025,7 +1022,7 @@
 		 * @returns {DDom}
 		 */
 		addText: function(text) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				element.appendChild(document.createTextNode(text));
 			}
 
@@ -1039,7 +1036,7 @@
 		 */
 		addClass: function(addClass) {
 			if (addClass !== "") {
-				for (const element of this.slice(0)) {
+				for (const element of this) {
 					// Check that handled element is Element
 					if (element.nodeType === 1) {
 						// Modern browsers have Element.classList
@@ -1066,7 +1063,7 @@
 		 * @return {DDom}
 		 */
 		toggleClass: function(className) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				// Check that handled element is Element
 				if (element.nodeType === 1) {
 					// Modern browsers have Element.classList
@@ -1093,7 +1090,7 @@
 		 * @return {DDom}
 		 */
 		buttonDisabled: function(state) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeName.toLowerCase() === "button") {
 					element.disabled = state;
 				}
@@ -1127,14 +1124,14 @@
 		 */
 		html: function(data) {
 			if (typeof data === "string" || typeof data === "number") {
-				for (const element of this.slice(0)) {
+				for (const element of this) {
 					element.innerHTML = data;
 				}
 
 			} else {
 				data = (data instanceof DDom) ? data.getFragment() : data;
 
-				for (const element of this.slice(0)) {
+				for (const element of this) {
 					element.innerHTML = "";
 					element.appendChild(data);
 				}
@@ -1148,7 +1145,7 @@
 		 * @returns {DDom}
 		 */
 		remove: function() {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.parentNode !== null) {
 					element.parentNode.removeChild(element);
 				}
@@ -1165,7 +1162,7 @@
 		 * @returns {DDom}
 		 */
 		removeAttr: function(attrName) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeType === 1) {
 					element.removeAttribute(attrName);
 				}
@@ -1180,7 +1177,7 @@
 		 * @returns {DDom}
 		 */
 		removeClass: function(removeClass) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				// Check that handled element is Element
 				if (element.nodeType === 1) {
 					// Modern browsers have Element.classList
@@ -1204,7 +1201,7 @@
 		 * @param {string|boolean|number} value
 		 */
 		setAttr: function(name, value) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeType === 1) {
 					element.setAttribute(name, value);
 				}
@@ -1220,7 +1217,7 @@
 		 * @return {DDom}
 		 */
 		setCSS: function(key, value) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeType === 1) {
 					element.style[key] = value;
 				}
@@ -1235,7 +1232,7 @@
 		 * @returns {DDom}
 		 */
 		setText: function(text) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				element.innerHTML = "";
 				element.appendChild(document.createTextNode(text));
 			}
@@ -1249,7 +1246,7 @@
 		 * @returns {DDom}
 		 */
 		setVal: function(value) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element instanceof HTMLInputElement) {
 					element.value = value;
 				}
@@ -1485,7 +1482,7 @@
 		 * @returns {DDom}
 		 */
 		setDataset: function(name, data) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				if (element.nodeType === 1) {
 					element.dataset[name] = data;
 				}
@@ -1500,7 +1497,7 @@
 		 * @return {DDom}
 		 */
 		setWidth: function(width) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				element.style.width = width;
 			}
 
@@ -1533,12 +1530,20 @@
 		 * @return {DDom}
 		 */
 		setHeight: function(height) {
-			for (const element of this.slice(0)) {
+			for (const element of this) {
 				element.style.height = height;
 			}
 
 			return this;
 		}
+	};
+
+	DDom.prototype[Symbol.iterator] = function () {
+		let index = -1;
+
+		return {
+			next: () => ({ value: this[++index], done: !(index in this) })
+		};
 	};
 
 	/**
