@@ -107,11 +107,12 @@
 		} catch(/*DOMException*/e) {
 			// $DDom.ce customEvent error is bit different
 			if (event instanceof CustomEvent) {
-				DDom.prototype.consoleError(`eventBind [DDom.ce:${type}] [${e.name}:${e.message}] [${e.fileName}:${e.lineNumber}]`);
+				DDom.prototype.consoleError(`eventBind [DDom.ce:${event.eventName}] [${e.name}:${e.message}]`);
 			} else {
 				DDom.prototype.consoleError(`eventBind [${type}] - ${e.name}:${e.message}`);
 			}
 
+			DDom.prototype.consoleError(e.stack);
 			event.preventDefault();
 			event.stopPropagation();
 		}
@@ -558,84 +559,27 @@
 		},
 
 		/**
-		 * Add Node after first element in DDom. This will keep events
+		 * Insert node before element
+		 * Default adds node to only first element and keeps events etc
+		 * If cloneToAll is used then all nodes will receive cloned element that wont include event listeners or properties
 		 * @param {(DDom|HTMLElement|Node)} node
+		 * @param {boolean} cloneToAll
 		 * @return {DDom}
 		 */
-		after: function(node) {
+		after: function(node, cloneToAll = false) {
 			if (this.length > 0) {
 				// Parse parameter Node element
 				node = this.parseToNode(node);
 
-				this[0].parentNode.insertBefore(node, this[0].nextSibling);
-			}
+				if (cloneToAll) {
+					for (const index of this.slice(0).keys()) {
+						// clone node so all elements can use it and each index has it's own elements
+						const cloneNode = node.cloneNode(true);
+						this[index].parentNode.insertBefore(cloneNode, this[index].nextSibling);
+					}
 
-			return this;
-		},
-
-		/**
-		 * Add Node before first element in DDom. This will keep events
-		 * @param {DDom|HTMLElement|Node} node
-		 * @return {DDom}
-		 */
-		before: function(node) {
-			if (this.length > 0) {
-				// Parse parameter Node element
-				node = this.parseToNode(node);
-
-				this[0].parentNode.insertBefore(node, this[0]);
-			}
-
-			return this;
-		},
-
-		/**
-		 * Append child Node to first element in DDom. This will keep events
-		 * @param {Node|DDom|string|number} node
-		 * @return {DDom}
-		 */
-		append: function(node) {
-			if (this.length > 0) {
-				// Parse parameter Node element
-				node = this.parseToNode(node);
-
-				this[0].appendChild(node);
-			}
-
-			return this;
-		},
-
-		/**
-		 * Prepend given data before first element in DDom. This will keep events
-		 * @param {DDom|Node|string} node
-		 * @returns {DDom}
-		 */
-		prepend: function(node) {
-			if (this.length > 0) {
-				// Parse parameter Node element
-				node = this.parseToNode(node);
-
-				this[0].insertBefore(node, this[0].firstChild);
-			}
-
-			return this;
-		},
-
-		/**
-		 * Replace first element in DDom with given element. This will keep events
-		 * @param {DDom|Node|string} node
-		 * @return {DDom}
-		 */
-		replace: function(node) {
-			if (this.length > 0) {
-				const parent = this[0].parentNode;
-
-				if (parent !== null) {
-					// Parse parameter Node element
-					node = this.parseToNode(node);
-
-					parent.replaceChild(node, this[0]);
-					this[0] = node;
+				} else {
+					this[0].parentNode.insertBefore(node, this[0].nextSibling);
 				}
 			}
 
@@ -643,22 +587,121 @@
 		},
 
 		/**
-		 * Replace all elements with given data using cloneNode that will loose events
-		 * @param {DDom|Node|string} node
+		 * Insert node before parent element
+		 * Default adds node to only first element and keeps events etc
+		 * If cloneToAll is used then all nodes will receive cloned element that wont include event listeners or properties
+		 * @param {DDom|HTMLElement|Node} node
+		 * @param {boolean} cloneToAll
 		 * @return {DDom}
 		 */
-		replaceAll: function(node) {
-			node = this.parseToNode(node);
+		before: function(node, cloneToAll = false) {
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
 
-			for (const [index, replace] of this.slice(0).entries()) {
-				const parent = replace.parentNode;
+				if (cloneToAll) {
+					for (const index of this.slice(0).keys()) {
+						// clone node so all elements can use it and each index has it's own elements
+						const cloneNode = node.cloneNode(true);
+						this[index].parentNode.insertBefore(cloneNode, this[index]);
+					}
 
-				if (parent !== null) {
-					// clone node so all elements can use it and each index has it's own elements
-					const cloneNode = node.cloneNode(true);
+				} else {
+					this[0].parentNode.insertBefore(node, this[0]);
+				}
+			}
 
-					parent.replaceChild(cloneNode, replace);
-					this[index] = cloneNode;
+			return this;
+		},
+
+		/**
+		 * Append child Node
+		 * Default adds node to only first element and keeps events etc
+		 * If cloneToAll is used then all nodes will receive cloned element that wont include event listeners or properties
+		 * @param {Node|DDom|string|number} node
+		 * @param {boolean} cloneToAll
+		 * @return {DDom}
+		 */
+		append: function(node, cloneToAll = false) {
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
+
+				if (cloneToAll) {
+					for (const index of this.slice(0).keys()) {
+						// clone node so all elements can use it and each index has it's own elements
+						const cloneNode = node.cloneNode(true);
+						this[index].appendChild(cloneNode);
+					}
+
+				} else {
+					this[0].appendChild(node);
+				}
+			}
+
+			return this;
+		},
+
+		/**
+		 * Prepend Node before given element
+		 * Default adds node to only first element and keeps events etc
+		 * If cloneToAll is used then all nodes will receive cloned element that wont include event listeners or properties
+		 * @param {DDom|Node|string} node
+		 * @param {boolean} cloneToAll
+		 * @returns {DDom}
+		 */
+		prepend: function(node, cloneToAll = false) {
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
+
+				if (cloneToAll) {
+					for (const index of this.slice(0).keys()) {
+						// clone node so all elements can use it and each index has it's own elements
+						const cloneNode = node.cloneNode(true);
+						this[index].insertBefore(cloneNode, this[index].firstChild);
+					}
+
+				} else {
+					this[0].insertBefore(node, this[0].firstChild);
+				}
+			}
+
+			return this;
+		},
+
+		/**
+		 * Replace elements with given node
+		 * Default adds node to only first element and keeps events etc
+		 * If cloneToAll is used then all nodes will receive cloned element that wont include event listeners or properties
+		 * @param {DDom|Node|string} node
+		 * @param {boolean} cloneToAll
+		 * @return {DDom}
+		 */
+		replace: function(node, cloneToAll = false) {
+			if (this.length > 0) {
+				// Parse parameter Node element
+				node = this.parseToNode(node);
+
+				if (cloneToAll) {
+					for (const index of this.slice(0).keys()) {
+						const parent = this[index].parentNode;
+
+						if (parent !== null) {
+							// clone node so all elements can use it and each index has it's own elements
+							const cloneNode = node.cloneNode(true);
+							parent.replaceChild(cloneNode, this[index]);
+							this[index] = cloneNode;
+						}
+					}
+
+				} else {
+					const parent = this[0].parentNode;
+
+					if (parent !== null) {
+						parent.replaceChild(node, this[0]);
+						this[0] = node;
+					}
 				}
 			}
 
